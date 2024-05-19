@@ -7,7 +7,7 @@ const RenderPage = () => {
   if (mainElement === null) {
     throw new Error("Main element not found");
   }
-  const token = sessionStorage.getItem("token");
+  const token = sessionStorage.getItem("authToken");
   if (!token) {
     new LoginFormComponent(mainElement);
     return
