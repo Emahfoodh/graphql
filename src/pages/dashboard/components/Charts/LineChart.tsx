@@ -155,7 +155,7 @@ const LineChart: React.FC<LineChartProps> = ({ xps }) => {
       series: [{ name: 'XP', data: accumulatedData }],
     });
   }, [xps]);
-
+// 
   const handleReset = () => {
     setState((prevState) => ({
       ...prevState,
