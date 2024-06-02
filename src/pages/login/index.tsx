@@ -36,13 +36,6 @@ const Login: React.FC = () => {
                       width={46}
                       height={32}
                     />
-                    <Image
-                      className="dark:hidden"
-                      src={'/images/logo/logo-dark.svg'}
-                      alt="Logo"
-                      width={176}
-                      height={32}
-                    />
                   </Link>
 
                   <span className="mt-15 inline-block">
