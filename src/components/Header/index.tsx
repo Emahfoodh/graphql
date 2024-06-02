@@ -14,7 +14,7 @@ const Header: React.FC<HeaderProps> = ({ user }) => {
         <Link href="/" className="flex items-center">
           <Image
             className="h-10 w-auto"
-            src={'/images/logo.svg'}
+            src={'/images/logo.png'}
             alt="Logo"
             width={176}
             height={32}

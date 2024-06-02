@@ -8,11 +8,14 @@ import {
   GET_PROJECTS_TRANSACTIONS,
   GET_USER_WITH_AUDIT,
   GET_XP,
+  GET_SKILLS,
+  GET_MODULE_CHILDREN,
 } from '@/graphql/queries';
 import CardDataStats from './components/CardDataStats';
 import LineChart from './components/Charts/LineChart';
 import { ApolloError } from '@apollo/client';
 import PieChart from './components/Charts/PieChart';
+import Table from './components/Table';
 
 const Dashboard: React.FC = () => {
   // check if the user is not logged in redirect to login
@@ -20,18 +23,27 @@ const Dashboard: React.FC = () => {
   const [user, setUser] = useState<User>();
   const [moduleEvent, setModuleEvent] = useState<UserModuleEvent>();
   const [xps, setXPs] = useState<Transaction[]>();
+  const [skills, setSkills] = useState<Skill[]>();
+  const [projects, setProjects] = useState<Map<string, Project>>();
+  const [openProjects, setOpenProjects] = useState<Map<string, Project>>();
+
   const fetchDashboardData = async (token: string) => {
     try {
-      const userData = await fetchGQLData(GET_USER_WITH_AUDIT, token);
-      if (userData.user.length === 0) {
+      // get user data
+      const userRes = await fetchGQLData(GET_USER_WITH_AUDIT, token);
+      const userData = userRes.data;
+      if (!userData || userData.user.length === 0) {
         console.error('No user found');
         return;
       }
       setUser(userData.user[0]);
-      const moduleEventData = await fetchGQLData(GET_MODULE_EVENT, token, {
+
+      // get module event data
+      const eventsRes = await fetchGQLData(GET_MODULE_EVENT, token, {
         userId: userData.user[0].id,
         modulePath: '/bahrain/bh-module',
       });
+      const moduleEventData = eventsRes.data;
       if (
         moduleEventData.user.length === 0 ||
         moduleEventData.user[0].events.length === 0
@@ -40,20 +52,25 @@ const Dashboard: React.FC = () => {
         return;
       }
       setModuleEvent(moduleEventData.user[0].events[0]);
-      const xpData = await fetchGQLData(GET_XP, token, {
+
+      // get user xp
+      const xpRes = await fetchGQLData(GET_XP, token, {
         userId: userData.user[0].id,
         rootEventId: moduleEventData.user[0].events[0].eventId,
       });
+      const xpData = xpRes.data;
       if (xpData.xp.aggregate.sum.amount === null) {
         console.error('No xp found');
-        return
+        return;
       }
       const updatedUser = {
         ...userData.user[0],
         xp: xpData.xp.aggregate.sum.amount,
       };
       setUser(updatedUser);
-      const xpProgressionData = await fetchGQLData(
+
+      // get xp progresstion data
+      const xpsRes= await fetchGQLData(
         GET_PROJECTS_TRANSACTIONS,
         token,
         {
@@ -61,11 +78,57 @@ const Dashboard: React.FC = () => {
           eventId: moduleEventData.user[0].events[0].eventId,
         },
       );
-      if (!xpProgressionData.transaction) {
+      const xpsData = xpsRes.data;
+      if (!xpsData.transaction) {
         console.error('No xp progression found');
         return;
       }
-      setXPs(xpProgressionData.transaction);
+
+      setXPs(xpsData.transaction);
+
+      // get user skills
+      const skillsRes = await fetchGQLData(GET_SKILLS, token, {
+        userId: userData.user[0].id,
+      });
+      const skillsData = skillsRes.data;
+      if (!skillsData.transaction) {
+        console.error('No skills found');
+        return;
+      }
+      const skills = skillsData.transaction;
+      const sortedSkills = [...skills].sort((a, b) => b.amount - a.amount);
+      setSkills(sortedSkills);
+
+      // get
+      const modChildrenRes = await fetchGQLData(
+        GET_MODULE_CHILDREN,
+        token,
+        {
+          eventId: moduleEventData.user[0].events[0].eventId,
+          registrationId:
+            moduleEventData.user[0].events[0].event.registrationId,
+        },
+      );
+      const modChildrenData = modChildrenRes.data;
+      if (!modChildrenData.object[0].childrenRelation) {
+        console.error('No projects found');
+        return;
+      }
+      const allProjects = modChildrenData.object[0].childrenRelation;
+      const projectsMap = new Map();
+      allProjects.forEach((project: Project) => {
+        if (
+          project.paths.length !== 0 &&
+          project.paths[0].object.name !== null
+        ) {
+          projectsMap.set(project.paths[0].object.name, {
+            ...project.attrs,
+            key: project.key,
+          });
+        }
+      });
+
+      setProjects(projectsMap);
     } catch (error) {
       console.error('Error fetching data:', error);
       if (
@@ -74,10 +137,86 @@ const Dashboard: React.FC = () => {
         error.graphQLErrors[0].extensions.code === 'invalid-jwt'
       ) {
         localStorage.removeItem('hasura-jwt-token');
+        router.push('/login');
       }
       return;
     }
   };
+
+  useEffect(() => {
+    if (!moduleEvent || !xps || !skills || !projects) return;
+    // create a skills map
+    const skillMap = new Map();
+    skills.forEach((skill: Skill) => {
+      const trimmedKey = skill.type.startsWith('skill_')
+        ? skill.type.slice(6)
+        : skill.type;
+      skillMap.set(trimmedKey, skill.amount);
+    });
+    const filteredProjects = new Map<string, Project>(
+      Array.from(projects.entries()).filter(([key, project]) => {
+        // remove any piscine
+        if (
+          key.toLowerCase().includes('piscine') ||
+          key.toLowerCase().includes('checkpoint')
+        )
+          return false;
+
+        // Check for matching transaction
+        if (xps.some((transaction) => transaction.object.name === key)) {
+          return false;
+        }
+        // Exclude the projects that cant be done depending on the core requirement
+        const requiredCore = project.requirements?.core;
+        if (requiredCore) {
+          const trimReqObj = requiredCore.startsWith('../')
+            ? requiredCore.slice(3)
+            : requiredCore;
+          const reqIsDone = xps.some(
+            (transaction) => transaction.object.name === trimReqObj,
+          );
+          if (!reqIsDone) return false;
+        }
+
+        // Exclude project if required skills are not met
+        const requiredSkills = project.requirements?.skills;
+        if (requiredSkills) {
+          const allDone = Object.entries(requiredSkills).every(
+            ([skill, requiredAmount]) => {
+              // Get available amount from skill map, default to 0 if not present
+              const availableAmount = skillMap.get(skill) || 0;
+              return availableAmount >= requiredAmount;
+            },
+          );
+          if (!allDone) return false;
+        }
+
+        // exclude the project if there is required object that the user havnt done
+        const requiredObjects = project.requirements?.objects;
+        if (requiredObjects) {
+          // Check if all required objects exist in xps
+          const allDone = requiredObjects.every((requiredObject) => {
+            const trimReqObj = requiredObject.startsWith('../')
+              ? requiredObject.slice(3)
+              : requiredObject;
+            const reqIsDone = xps.some(
+              (transaction) => transaction.object.name === trimReqObj,
+            );
+            return reqIsDone;
+          });
+          if (!allDone) return false;
+        }
+        return true;
+      }),
+    );
+
+    // Sort the filtered projects by baseXp in ascending order
+    const sortedProjects = Array.from(filteredProjects.entries()).sort(
+      (a, b) => a[1].baseXp - b[1].baseXp,
+    );
+    setOpenProjects(new Map(sortedProjects));
+  }, [moduleEvent, xps, skills, projects]);
+
   useEffect(() => {
     const token = localStorage.getItem('hasura-jwt-token');
     if (!token) {
@@ -86,6 +225,7 @@ const Dashboard: React.FC = () => {
     }
     fetchDashboardData(token);
   }, []);
+
   return (
     <>
       <Head>
@@ -161,41 +301,41 @@ const Dashboard: React.FC = () => {
               ></path>
             </svg>
           </CardDataStats>
-          <CardDataStats title="Total Users" total="3.456">
+          <CardDataStats
+            title="Open Projects"
+            total={openProjects ? openProjects.size.toString() : '0'}
+            info={openProjects?.size ? Array.from(openProjects.keys()) : []}
+          >
             <svg
               className="fill-primary dark:fill-white"
-              width="22"
-              height="18"
-              viewBox="0 0 22 18"
-              fill="none"
+              width="800px"
+              height="800px"
+              viewBox="-5 -5 42 42"
+              version="1.1"
               xmlns="http://www.w3.org/2000/svg"
             >
-              <path
-                d="M7.18418 8.03751C9.31543 8.03751 11.0686 6.35313 11.0686 4.25626C11.0686 2.15938 9.31543 0.475006 7.18418 0.475006C5.05293 0.475006 3.2998 2.15938 3.2998 4.25626C3.2998 6.35313 5.05293 8.03751 7.18418 8.03751ZM7.18418 2.05626C8.45605 2.05626 9.52168 3.05313 9.52168 4.29063C9.52168 5.52813 8.49043 6.52501 7.18418 6.52501C5.87793 6.52501 4.84668 5.52813 4.84668 4.29063C4.84668 3.05313 5.9123 2.05626 7.18418 2.05626Z"
+              <g
+                id="Icon-Set"
+                transform="translate(-568.000000, -463.000000)"
                 fill=""
-              />
-              <path
-                d="M15.8124 9.6875C17.6687 9.6875 19.1468 8.24375 19.1468 6.42188C19.1468 4.6 17.6343 3.15625 15.8124 3.15625C13.9905 3.15625 12.478 4.6 12.478 6.42188C12.478 8.24375 13.9905 9.6875 15.8124 9.6875ZM15.8124 4.7375C16.8093 4.7375 17.5999 5.49375 17.5999 6.45625C17.5999 7.41875 16.8093 8.175 15.8124 8.175C14.8155 8.175 14.0249 7.41875 14.0249 6.45625C14.0249 5.49375 14.8155 4.7375 15.8124 4.7375Z"
-                fill=""
-              />
-              <path
-                d="M15.9843 10.0313H15.6749C14.6437 10.0313 13.6468 10.3406 12.7874 10.8563C11.8593 9.61876 10.3812 8.79376 8.73115 8.79376H5.67178C2.85303 8.82814 0.618652 11.0625 0.618652 13.8469V16.3219C0.618652 16.975 1.13428 17.4906 1.7874 17.4906H20.2468C20.8999 17.4906 21.4499 16.9406 21.4499 16.2875V15.4625C21.4155 12.4719 18.9749 10.0313 15.9843 10.0313ZM2.16553 15.9438V13.8469C2.16553 11.9219 3.74678 10.3406 5.67178 10.3406H8.73115C10.6562 10.3406 12.2374 11.9219 12.2374 13.8469V15.9438H2.16553V15.9438ZM19.8687 15.9438H13.7499V13.8469C13.7499 13.2969 13.6468 12.7469 13.4749 12.2313C14.0937 11.7844 14.8499 11.5781 15.6405 11.5781H15.9499C18.0812 11.5781 19.8343 13.3313 19.8343 15.4625V15.9438H19.8687Z"
-                fill=""
-              />
+              >
+                <path
+                  d="M597,481 L570,481 L570,467 C570,465.896 570.896,465 572,465 L595,465 C596.104,465 597,465.896 597,467 L597,481 L597,481 Z M597,485 C597,486.104 596.104,487 595,487 L572,487 C570.896,487 570,486.104 570,485 L570,483 L597,483 L597,485 L597,485 Z M582,489 L586,489 L586,493 L582,493 L582,489 Z M595,463 L572,463 C569.791,463 568,464.791 568,467 L568,485 C568,487.209 569.791,489 572,489 L580,489 L580,493 L578,493 C577.447,493 577,493.448 577,494 C577,494.553 577.447,495 578,495 L590,495 C590.553,495 591,494.553 591,494 C591,493.448 590.553,493 590,493 L588,493 L588,489 L595,489 C597.209,489 599,487.209 599,485 L599,467 C599,464.791 597.209,463 595,463 L595,463 Z"
+                  id="desktop"
+                  fill=""
+                ></path>
+              </g>
             </svg>
           </CardDataStats>
         </div>
 
         <div className="mt-4 grid grid-cols-12 gap-4 md:mt-6 md:gap-6 2xl:mt-7.5 2xl:gap-7.5">
           <LineChart xps={xps} />
-          <PieChart />
+          <PieChart skills={skills} />
 
-          {/*<ChartTwo />
-        <MapOne />
-        <div className="col-span-12 xl:col-span-8">
-          <TableOne />
-        </div>
-        <ChatCard /> */}
+          <div className="col-span-12 xl:col-span-12">
+            <Table transactions={xps ? xps : []} />
+          </div>
         </div>
       </DefaultLayout>
     </>

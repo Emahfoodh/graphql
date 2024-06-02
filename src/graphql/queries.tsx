@@ -84,3 +84,60 @@ export const GET_PROJECTS_TRANSACTIONS = gql`
     }
   }
 `;
+
+export const GET_PROJECTS_DATA = gql`
+  query Object($eventId: Int!, $registrationId: Int!) {
+    object(
+      where: {
+        type: { _eq: "module" }
+        events: { id: { _eq: $eventId } }
+        registrations: { id: { _eq: $registrationId } }
+      }
+    ) {
+      type
+      name
+      childrenRelation {
+        attrs
+        key
+      }
+    }
+  }
+`;
+
+export const GET_SKILLS = gql`
+  query Transaction($userId: Int!) {
+    transaction(
+      order_by: [{ type: desc }, { amount: desc }]
+      distinct_on: [type]
+      where: { userId: { _eq: $userId }, type: { _like: "skill_%" } }
+    ) {
+      type
+      amount
+    }
+  }
+`;
+
+// to get the prerequisites for the module
+export const GET_MODULE_CHILDREN = gql`
+  query Object($eventId: Int!, $registrationId: Int!) {
+    object(
+      where: {
+        type: { _eq: "module" }
+        events: { id: { _eq: $eventId } }
+        registrations: { id: { _eq: $registrationId } }
+      }
+    ) {
+      type
+      name
+      childrenRelation {
+        attrs
+        key
+        paths {
+          object {
+            name
+          }
+        }
+      }
+    }
+  }
+`;

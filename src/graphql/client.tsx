@@ -14,10 +14,6 @@ export const fetchGQLData = async (
       Authorization: `Bearer ${token}`,
     },
   });
-  try {
     const response = await client.query({ query: myquery, variables });
-    return response.data
-  } catch (error) {
-    console.error('Error fetching data:', error);
-  }
+    return response
 };
